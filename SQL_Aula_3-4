@@ -18,3 +18,27 @@ altura decimal (3,2),
 nacionalidade varchar(20) default 'Brasil',
 primary key (id)
 ) default charset = utf8mb3;
+
+
+#Aula 5
+insert into pessoas
+(nome, nacimento, sexo, peso, altura, nacionalidade)
+values
+('Godofredo','1984-01-02','M','78.5','1.83','Brasil');
+
+insert into pessoas
+(nome, nacimento, sexo, peso, altura, nacionalidade)
+values
+('Maria','1984-12-30','F','55.2','1.65','Portugal');
+
+insert into pessoas values
+(default,'Adalgiza','1984-11-2','F','63.2','1.75','Irlanda');
+
+select * from pessoas;
+insert into pessoas values
+(default,'Ana','1975-01-22','F','652.3','1.45','EUA'),
+(default,'Pedro','200-07-15','m','52.3','1.45','Brasil'),
+(default, 'Cláudio','1975-4-22','M','89','2.05','Brasil');
+
+select * from pessoas;
+
