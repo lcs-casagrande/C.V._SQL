@@ -1,0 +1,42 @@
+name: Publish Chess Academy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: chess-academy-pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check TypeScript and chess rules
+        run: npm run typecheck && npm test
+      - name: Build for repository URL
+        run: npm run build -- --base=/C.V._SQL/
+      - name: Checkout published branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: published-site
+      - name: Update published site
+        run: |
+          rsync -a --delete --exclude=.git dist/ published-site/
+          cd published-site
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Publish Chess Academy'
+          git push origin HEAD:gh-pages
