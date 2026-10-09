@@ -139,3 +139,30 @@ for (const opening of openings)
     assert.equal(own, opening.line.length / 2);
     assert.deepEqual(cloneGame(c).history(), opening.line);
   });
+test("Requested 14 opening prefixes, identities and study colors are preserved", () => {
+  const requested: Record<string, [string, string[]]> = {
+    italiana: ["w", ["e4", "e5", "Nf3", "Nc6", "Bc4"]],
+    escocesa: ["w", ["e4", "e5", "Nf3", "Nc6", "d4"]],
+    gambito: ["w", ["d4", "d5", "c4"]],
+    "gambito-rei": ["w", ["e4", "e5", "f4"]],
+    evans: ["w", ["e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5", "b4"]],
+    "rainha-recusado": ["b", ["d4", "d5", "c4", "e6"]],
+    eslava: ["b", ["d4", "d5", "c4", "c6"]],
+    "caro-kann": ["b", ["e4", "c6", "d4", "d5"]],
+    francesa: ["b", ["e4", "e6", "d4", "d5"]],
+    siciliana: ["b", ["e4", "c5"]],
+    escandinava: ["b", ["e4", "d5"]],
+    petroff: ["b", ["e4", "e5", "Nf3", "Nf6"]],
+    "india-rei": ["b", ["d4", "Nf6", "c4", "g6", "Nc3", "Bg7"]],
+    holandesa: ["b", ["d4", "f5"]],
+  };
+  assert.equal(openings.length, 14);
+  assert.equal(new Set(openings.map((o) => o.id)).size, 14);
+  assert.equal(openings.filter((o) => o.color === "w").length, 5);
+  assert.equal(openings.filter((o) => o.color === "b").length, 9);
+  for (const [id, [color, prefix]] of Object.entries(requested)) {
+    const o = openings.find((o) => o.id === id)!;
+    assert.equal(o.color, color);
+    assert.deepEqual(o.line.slice(0, prefix.length), prefix);
+  }
+});

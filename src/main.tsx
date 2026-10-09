@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Chess, type Square } from "chess.js";
 import {
+  Maximize,
+  Minimize,
+  PanelRight,
   ArrowLeft,
   ArrowRight,
   BookOpen,
@@ -41,34 +44,93 @@ import { Board } from "./Board";
 import { PromotionDialog } from "./PromotionDialog";
 import "@fontsource-variable/dm-sans";
 import "@fontsource-variable/outfit";
+import { TrainingSetup } from "./TrainingSetup";
+import {
+  nextOpening,
+  recordTrainingSuccess,
+  type TrainingSession,
+} from "./training";
 import "./style.css";
+import { MoveHistory } from "./MoveHistory";
+import { EndgameCatalog } from "./EndgameCatalog";
+import { EndgameTraining } from "./EndgameTraining";
+import { endgameData, type Endgame } from "./endgameData";
+import {
+  loadEndgameProgress,
+  saveEndgameProgress,
+  recordEndgame,
+} from "./EndgameProgress";
 
 type View =
-  "home" | "catalog" | "practice-center" | "game" | "tutorial" | "practice";
-function MoveHistory({ game }: { game: Chess }) {
-  const h = game.history();
-  return (
-    <div className="history">
-      <div className="panel-heading">
-        Histórico de lances <span>{h.length} meios-lances</span>
-      </div>
-      <div className="move-list">
-        {!h.length ? (
-          <div className="history-empty">Os movimentos aparecerão aqui.</div>
-        ) : (
-          Array.from({ length: Math.ceil(h.length / 2) }, (_, i) => (
-            <div className="move-row" key={i}>
-              <span>{i + 1}.</span>
-              <strong>{h[i * 2]}</strong>
-              <strong>{h[i * 2 + 1] || "—"}</strong>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
+  | "home"
+  | "catalog"
+  | "practice-center"
+  | "game"
+  | "tutorial"
+  | "practice"
+  | "endgames"
+  | "endgame-tutorial"
+  | "endgame-practice";
 function App() {
+  const [endgameProgress, setEndgameProgress] = useState(loadEndgameProgress);
+  const [selectedEndgame, setSelectedEndgame] = useState(endgameData[0]);
+  const [endgameRestart, setEndgameRestart] = useState(0);
+  const [endgameStorageError, setEndgameStorageError] = useState(false);
+  useEffect(() => {
+    setEndgameStorageError(!saveEndgameProgress(endgameProgress));
+  }, [endgameProgress]);
+  function startEndgame(exercise: Endgame, practice: boolean) {
+    navigate(practice ? "endgame-practice" : "endgame-tutorial");
+    setSelectedEndgame(exercise);
+    setEndgameRestart((n) => n + 1);
+    setEndgameProgress((p) => recordEndgame(p, exercise.id, false));
+  }
+  const [fullBoard, setFullBoard] = useState(false);
+  const [showInstructions, setShowInstructions] = useState(false);
+  const shell = useRef<HTMLDivElement>(null);
+  const nativeFullscreen = useRef(false);
+  function exitFullBoard() {
+    setFullBoard(false);
+    if (document.fullscreenElement === shell.current)
+      void document.exitFullscreen().catch(() => {});
+  }
+  function enterFullBoard() {
+    setShowInstructions(false);
+    setFullBoard(true);
+    if (shell.current?.requestFullscreen)
+      void shell.current.requestFullscreen().catch(() => {});
+  }
+  useEffect(() => {
+    const changed = () => {
+      if (document.fullscreenElement === shell.current)
+        nativeFullscreen.current = true;
+      else if (nativeFullscreen.current) {
+        nativeFullscreen.current = false;
+        setFullBoard(false);
+      }
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector('[role="dialog"]'))
+        exitFullBoard();
+    };
+    document.addEventListener("fullscreenchange", changed);
+    window.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("fullscreenchange", changed);
+      window.removeEventListener("keydown", key);
+    };
+  }, []);
+  useEffect(() => {
+    if (fullBoard) {
+      const previous = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = previous;
+      };
+    }
+  }, [fullBoard]);
+
+  const [session, setSession] = useState<TrainingSession | null>(null);
   const [view, setView] = useState<View>("home");
   const [progress, setProgress] = useState<Progress>(loadProgress);
   const [filter, setFilter] = useState<Color>("w");
@@ -109,6 +171,7 @@ function App() {
     pending.current = setTimeout(fn, ms);
   }
   function fresh(next: View, opening?: Opening, color?: Color) {
+    if (next !== "practice") setSession(null);
     if (pending.current) clearTimeout(pending.current);
     const c = new Chess();
     setGame(c);
@@ -125,9 +188,12 @@ function App() {
     setTick((t) => t + 1);
   }
   function startOpening(o: Opening, m: "tutorial" | "practice") {
+    setSession(null);
     fresh(m, o);
   }
   function navigate(next: View) {
+    exitFullBoard();
+    setSession(null);
     if (pending.current) clearTimeout(pending.current);
     setBusy(false);
     setView(next);
@@ -162,10 +228,22 @@ function App() {
     }
     if (index + 1 >= o.line.length) finishOpening(forTutorial, o);
   }
+  function startTraining(training: TrainingSession) {
+    const first = nextOpening(training);
+    if (!first) return;
+    setSession(training);
+    fresh("practice", first);
+  }
   function finishOpening(forTutorial: boolean, o: Opening) {
     setDone(true);
     setBusy(false);
     setProgress((p) => completeOpening(p, o.id, forTutorial));
+    if (!forTutorial && session) {
+      const updated = recordTrainingSuccess(session, o.id);
+      setSession(updated);
+      const next = nextOpening(updated, o.id);
+      if (next) schedule(() => fresh("practice", next), 1600);
+    }
   }
   // For black opening lines, the first white move is executed automatically.
   useEffect(() => {
@@ -299,7 +377,62 @@ function App() {
     .slice(0, step)
     .filter((_, i) => i % 2 === (chosen.color === "w" ? 0 : 1)).length;
   return (
-    <div className="app-shell">
+    <div
+      ref={shell}
+      className={`app-shell ${fullBoard ? "board-fullscreen" : ""} ${showInstructions ? "instructions-open" : ""}`}
+    >
+      {(view === "game" ||
+        view === "tutorial" ||
+        view === "practice" ||
+        view === "endgame-tutorial" ||
+        view === "endgame-practice") && (
+        <div className={fullBoard ? "focus-toolbar" : "focus-entry"}>
+          {fullBoard ? (
+            <>
+              <span className="focus-title">
+                {view === "game"
+                  ? "Jogo livre"
+                  : view.startsWith("endgame-")
+                    ? selectedEndgame.name
+                    : chosen.name}
+              </span>
+              <button
+                className="secondary-btn"
+                aria-expanded={showInstructions}
+                onClick={() => setShowInstructions((value) => !value)}
+              >
+                <PanelRight size={16} />
+                {showInstructions ? "Ocultar instruções" : "Mostrar instruções"}
+              </button>
+              <button
+                className="secondary-btn"
+                disabled={!!session && done}
+                onClick={() =>
+                  view.startsWith("endgame-")
+                    ? setEndgameRestart((n) => n + 1)
+                    : fresh(
+                        view,
+                        view === "game" ? undefined : chosen,
+                        view === "game" ? modeColor : undefined,
+                      )
+                }
+              >
+                <RotateCcw size={16} />
+                <span className="focus-restart-label">Reiniciar</span>
+              </button>
+              <button className="secondary-btn" onClick={exitFullBoard}>
+                <Minimize size={16} />
+                Sair
+              </button>
+            </>
+          ) : (
+            <button className="secondary-btn" onClick={enterFullBoard}>
+              <Maximize size={16} />
+              Tela cheia
+            </button>
+          )}
+        </div>
+      )}
       <aside className="sidebar">
         <button className="brand" onClick={goHome}>
           <div className="brand-emblem">♞</div>
@@ -337,17 +470,28 @@ function App() {
           >
             <Target size={19} /> Central de repetição
           </button>
+          <button
+            className={view.startsWith("endgame") ? "nav-on" : ""}
+            onClick={() => navigate("endgames")}
+          >
+            <Flag size={19} />
+            Treinar finais
+          </button>
         </nav>
         <div className="side-label train-label">SEU TREINAMENTO</div>
         <div className="side-progress">
           <div className="side-progress-head">
             <span>Domínio de aberturas</span>
-            <strong>{mastered}/4</strong>
+            <strong>
+              {mastered}/{openings.length}
+            </strong>
           </div>
           <div className="progress-track">
-            <div style={{ width: `${mastered * 25}%` }} />
+            <div style={{ width: `${(mastered / openings.length) * 100}%` }} />
           </div>
-          <small>{totalWins} de 12 repetições concluídas</small>
+          <small>
+            {totalWins} de {openings.length * 3} repetições concluídas
+          </small>
         </div>
         <div className="sidebar-bottom">
           <div className="side-bottom-icon">
@@ -375,7 +519,11 @@ function App() {
                     ? "Aberturas"
                     : view === "practice-center"
                       ? "Central de repetição"
-                      : chosen.name}
+                      : view.startsWith("endgame")
+                        ? view === "endgames"
+                          ? "Treinamento de Finais"
+                          : selectedEndgame.name
+                        : chosen.name}
             </span>
           </div>
           <div className="header-right">
@@ -418,9 +566,16 @@ function App() {
             <Target size={18} />
             Repetir
           </button>
+          <button
+            onClick={() => navigate("endgames")}
+            aria-current={view.startsWith("endgame") ? "page" : undefined}
+          >
+            <Flag size={18} />
+            Finais
+          </button>
         </nav>
         <div className="page-content">
-          {storageUnavailable && (
+          {(storageUnavailable || endgameStorageError) && (
             <div role="status" className="feedback bad">
               O navegador bloqueou o armazenamento. Seu progresso funciona nesta
               sessão, mas não será salvo após atualizar.
@@ -463,7 +618,7 @@ function App() {
                   <h2>O que vamos fazer hoje?</h2>
                 </div>
               </div>
-              <div className="feature-grid">
+              <div className="feature-grid three-modules">
                 <button
                   className="feature-card"
                   onClick={() => fresh("game", undefined, "w")}
@@ -497,12 +652,34 @@ function App() {
                   </h3>
                   <p>
                     Aprenda as ideias por trás de cada movimento e memorize
-                    quatro aberturas essenciais.
+                    {openings.length} aberturas essenciais.
                   </p>
                   <span className="feature-link gold-link">
                     Explorar aberturas <ChevronRight size={16} />
                   </span>
                   <div className="feature-watermark">♙</div>
+                </button>
+                <button
+                  className="feature-card"
+                  onClick={() => navigate("endgames")}
+                >
+                  <div className="feature-icon green-icon">
+                    <Flag size={27} />
+                  </div>
+                  <div className="feature-kicker">CONVERSÃO DE VANTAGEM</div>
+                  <h3>
+                    Treinamento de Finais <ArrowRight size={20} />
+                  </h3>
+                  <p>Aprenda a transformar vantagens em vitória.</p>
+                  <p>
+                    Domine os finais essenciais com explicações interativas,
+                    exercícios práticos e repetição.
+                  </p>
+                  <small>3 exercícios disponíveis.</small>
+                  <span className="feature-link">
+                    Explorar finais <ChevronRight size={16} />
+                  </span>
+                  <div className="feature-watermark">♖</div>
                 </button>
               </div>
               <div className="section-heading section-space">
@@ -524,11 +701,15 @@ function App() {
                   </span>
                   <strong>
                     {mastered}
-                    <small> / 4</small>
+                    <small> / {openings.length}</small>
                   </strong>
                   <span>Aberturas dominadas</span>
                   <div className="mini-track">
-                    <div style={{ width: `${mastered * 25}%` }} />
+                    <div
+                      style={{
+                        width: `${(mastered / openings.length) * 100}%`,
+                      }}
+                    />
                   </div>
                 </div>
                 <div className="stat-card">
@@ -537,11 +718,15 @@ function App() {
                   </span>
                   <strong>
                     {totalWins}
-                    <small> / 12</small>
+                    <small> / {openings.length * 3}</small>
                   </strong>
                   <span>Repetições corretas</span>
                   <div className="mini-track">
-                    <div style={{ width: `${(totalWins / 12) * 100}%` }} />
+                    <div
+                      style={{
+                        width: `${(totalWins / (openings.length * 3)) * 100}%`,
+                      }}
+                    />
                   </div>
                 </div>
                 <div className="stat-card">
@@ -550,19 +735,39 @@ function App() {
                   </span>
                   <strong>
                     {openings.filter((o) => progress[o.id]?.studied).length}
-                    <small> / 4</small>
+                    <small> / {openings.length}</small>
                   </strong>
                   <span>Tutoriais concluídos</span>
                   <div className="mini-track">
                     <div
                       style={{
-                        width: `${openings.filter((o) => progress[o.id]?.studied).length * 25}%`,
+                        width: `${(openings.filter((o) => progress[o.id]?.studied).length / openings.length) * 100}%`,
                       }}
                     />
                   </div>
                 </div>
               </div>
             </>
+          )}
+          {view === "endgames" && (
+            <EndgameCatalog progress={endgameProgress} onStart={startEndgame} />
+          )}
+          {(view === "endgame-tutorial" || view === "endgame-practice") && (
+            <EndgameTraining
+              key={`${selectedEndgame.id}-${view}-${endgameRestart}`}
+              exercise={selectedEndgame}
+              practice={view === "endgame-practice"}
+              hideInstructions={fullBoard && !showInstructions}
+              wins={endgameProgress[selectedEndgame.id].wins}
+              onSuccess={() =>
+                setEndgameProgress((p) =>
+                  recordEndgame(p, selectedEndgame.id, true),
+                )
+              }
+              onBack={() => navigate("endgames")}
+              onPractice={() => startEndgame(selectedEndgame, true)}
+              onReview={() => startEndgame(selectedEndgame, false)}
+            />
           )}
           {view === "catalog" && (
             <>
@@ -651,23 +856,29 @@ function App() {
               <div className="repeat-summary">
                 <div className="repeat-circle">
                   {mastered}
-                  <span>/4</span>
+                  <span>/{openings.length}</span>
                 </div>
                 <div>
                   <strong>
-                    {mastered === 4
+                    {mastered === openings.length
                       ? "Todas as aberturas dominadas!"
                       : "Sua evolução, lance a lance."}
                   </strong>
                   <p>
-                    {mastered} de 4 aberturas dominadas · {totalWins} de 12
+                    {mastered} de {openings.length} aberturas dominadas ·{" "}
+                    {totalWins} de {openings.length * 3}
                     repetições concluídas
                   </p>
                 </div>
                 <div className="repeat-track">
-                  <div style={{ width: `${(totalWins / 12) * 100}%` }} />
+                  <div
+                    style={{
+                      width: `${(totalWins / (openings.length * 3)) * 100}%`,
+                    }}
+                  />
                 </div>
               </div>
+              <TrainingSetup onStart={startTraining} />
               <div className="repeat-list">
                 {openings.map((o) => (
                   <div className="repeat-item" key={o.id}>
@@ -876,6 +1087,7 @@ function App() {
                 </div>
                 <button
                   className="secondary-btn"
+                  disabled={!!session && done}
                   onClick={() => fresh(view, chosen)}
                 >
                   <RotateCcw size={16} /> Reiniciar
@@ -900,8 +1112,10 @@ function App() {
                     orientation={chosen.color}
                     interactive={!busy && !done && game.turn() === chosen.color}
                     onMove={processMove}
-                    hint={currentHint}
-                    showHints={view === "tutorial"}
+                    hint={fullBoard && !showInstructions ? null : currentHint}
+                    showHints={
+                      view === "tutorial" && (!fullBoard || showInstructions)
+                    }
                   />
                   <div className="player-strip">
                     <div className="player-avatar self">
@@ -921,6 +1135,36 @@ function App() {
                   </div>
                 </div>
                 <div className="right-column">
+                  {session && (
+                    <div className="training-session" role="status">
+                      <h3>Treino aleatório</h3>
+                      {Object.keys(session.targets).map((id) => (
+                        <div className="training-session-row" key={id}>
+                          <span>
+                            {openings.find((o) => o.id === id)!.short}
+                          </span>
+                          <strong>
+                            {session.completed[id]}/{session.targets[id]}
+                          </strong>
+                        </div>
+                      ))}
+                      <p>
+                        {done
+                          ? nextOpening(session)
+                            ? "Preparando a próxima abertura…"
+                            : "Meta atingida em todas as aberturas!"
+                          : "Complete a sequência sem erros."}
+                      </p>
+                      <button
+                        className="secondary-btn"
+                        onClick={() => navigate("practice-center")}
+                      >
+                        {done && !nextOpening(session)
+                          ? "Voltar à central"
+                          : "Encerrar treino"}
+                      </button>
+                    </div>
+                  )}
                   <div className="lesson-card">
                     <div className="lesson-kicker">
                       {view === "tutorial" ? "SUA AULA" : "TESTE DE MEMÓRIA"}{" "}
@@ -944,25 +1188,31 @@ function App() {
                         <h2>
                           {view === "tutorial"
                             ? "Abertura aprendida!"
-                            : "Sequência perfeita!"}
+                            : session && !nextOpening(session)
+                              ? "Treino concluído!"
+                              : "Sequência perfeita!"}
                         </h2>
                         <p>
                           {view === "tutorial"
                             ? `Você concluiu o tutorial da ${chosen.name}. Agora fixe essa estratégia na memória.`
-                            : `Excelente! Você reproduziu todos os lances sem erros. ${Math.min(progress[chosen.id].wins, 3)} de 3 repetições concluídas.`}
+                            : session
+                              ? `Acerto registrado: ${session.completed[chosen.id]} de ${session.targets[chosen.id]} repetições nesta sessão.`
+                              : `Excelente! Você reproduziu todos os lances sem erros. ${Math.min(progress[chosen.id].wins, 3)} de 3 repetições concluídas.`}
                         </p>
                         <div className="sequence-text">
                           {lineText(chosen.line)}
                         </div>
-                        <button
-                          className="primary-btn wide"
-                          onClick={() => fresh("practice", chosen)}
-                        >
-                          {view === "tutorial"
-                            ? "Iniciar treinamento de repetição"
-                            : "Praticar novamente"}{" "}
-                          <ArrowRight size={16} />
-                        </button>
+                        {!session && (
+                          <button
+                            className="primary-btn wide"
+                            onClick={() => fresh("practice", chosen)}
+                          >
+                            {view === "tutorial"
+                              ? "Iniciar treinamento de repetição"
+                              : "Praticar novamente"}{" "}
+                            <ArrowRight size={16} />
+                          </button>
+                        )}
                         {view === "practice" &&
                           progress[chosen.id].wins >= 3 && (
                             <div className="dominated">
@@ -1006,8 +1256,11 @@ function App() {
                     ) : (
                       <>
                         <span className="step-eyebrow">
-                          REPETIÇÃO {Math.min(progress[chosen.id].wins + 1, 3)}{" "}
-                          DE 3
+                          REPETIÇÃO{" "}
+                          {session
+                            ? session.completed[chosen.id] + 1
+                            : Math.min(progress[chosen.id].wins + 1, 3)}{" "}
+                          DE {session ? session.targets[chosen.id] : 3}
                         </span>
                         <h2>Confie na sua memória.</h2>
                         <p className="lesson-explanation">
@@ -1016,11 +1269,17 @@ function App() {
                         </p>
                         <div className="memory-count">
                           <div>
-                            <strong>{progress[chosen.id].wins}</strong>
+                            <strong>
+                              {session
+                                ? session.completed[chosen.id]
+                                : progress[chosen.id].wins}
+                            </strong>
                             <span>Acertos completos</span>
                           </div>
                           <div>
-                            <strong>3</strong>
+                            <strong>
+                              {session ? session.targets[chosen.id] : 3}
+                            </strong>
                             <span>Meta</span>
                           </div>
                         </div>

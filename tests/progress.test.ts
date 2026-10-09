@@ -36,7 +36,7 @@ test("Correct completions accumulate up to three, including intervening errors",
   assert.equal(p.italiana.wins, 3);
   assert.equal(p.gambito.wins, 0);
 });
-test("All four mastered openings survive storage round trip", () => {
+test("All mastered openings survive storage round trip", () => {
   storage();
   let p = initialProgress();
   for (const id of Object.keys(p)) {
@@ -74,4 +74,20 @@ test("Storage denied does not throw or break in-memory progression", () => {
   });
   assert.deepEqual(loadProgress(), initialProgress());
   assert.equal(saveProgress(initialProgress()), false);
+});
+test("Expanding the catalog preserves legacy progress and initializes new openings", () => {
+  storage(
+    JSON.stringify({
+      italiana: { studied: true, wins: 3 },
+      gambito: { studied: true, wins: 2 },
+      siciliana: { studied: false, wins: 1 },
+      francesa: { studied: true, wins: 3 },
+    }),
+  );
+  const result = loadProgress();
+  assert.equal(Object.keys(result).length, 14);
+  assert.deepEqual(result.gambito, { studied: true, wins: 2 });
+  assert.deepEqual(result.siciliana, { studied: false, wins: 1 });
+  assert.deepEqual(result.escocesa, { studied: false, wins: 0 });
+  assert.deepEqual(result["rainha-recusado"], { studied: false, wins: 0 });
 });

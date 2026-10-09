@@ -46,7 +46,7 @@ async function beginPractice(page: Page, o: Opening) {
   await go(page, "Central de repetição", "Repetir");
   await page
     .locator(".repeat-item")
-    .filter({ hasText: o.name })
+    .filter({ has: page.getByText(o.name, { exact: true }) })
     .getByRole("button", { name: "Praticar", exact: true })
     .click();
   await tick(page);
@@ -211,7 +211,9 @@ for (const o of openings) {
     await expect(page.locator(".dominated")).toContainText("Abertura dominada");
     await page.reload();
     await go(page, "Central de repetição", "Repetir");
-    const row = page.locator(".repeat-item").filter({ hasText: o.name });
+    const row = page
+      .locator(".repeat-item")
+      .filter({ has: page.getByText(o.name, { exact: true }) });
     await expect(row.locator(".status")).toHaveText("Dominada");
     await expect(row.locator(".filled")).toHaveCount(3);
     expect(await wins(page, o.id)).toBe(3);
@@ -405,4 +407,238 @@ test("bundled fonts load without external requests", async ({ page }) => {
     ),
   ).toBe(true);
   expect(external).toEqual([]);
+});
+test("custom random training honors individual targets, alternates colors and finishes", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    Math.random = () => 0;
+  });
+  await go(page, "Central de repetição", "Repetir");
+  await page.getByText("Selecionar aberturas (0)", { exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: "Gambito da Rainha", exact: true })
+    .check();
+  await page
+    .getByRole("checkbox", { name: "Defesa Siciliana", exact: true })
+    .check();
+  await page
+    .getByRole("spinbutton", {
+      name: "Repetições de Gambito da Rainha",
+      exact: true,
+    })
+    .fill("1");
+  await page
+    .getByRole("spinbutton", {
+      name: "Repetições de Defesa Siciliana",
+      exact: true,
+    })
+    .fill("2");
+  await page
+    .getByRole("button", { name: "Iniciar treino aleatório", exact: true })
+    .click();
+  for (const [index, id] of ["gambito", "siciliana", "siciliana"].entries()) {
+    const opening = openings.find((o) => o.id === id)!;
+    await tick(page);
+    await expect(
+      page.getByRole("heading", { name: new RegExp(`^${opening.name} MODO`) }),
+    ).toBeVisible();
+    await expect(page.locator(".square").first()).toHaveAttribute(
+      "data-square",
+      opening.color === "w" ? "a8" : "h1",
+    );
+    // An error starts a new attempt but keeps session goals and completed openings.
+    if (index === 1) {
+      await clickMove(page, "a7", "a6");
+      await expect(page.locator(".feedback.bad")).toBeVisible();
+      await tick(page, 2000);
+      await tick(page);
+      await expect(
+        page
+          .locator(".training-session-row")
+          .filter({ hasText: "Gambito da Rainha" }),
+      ).toContainText("1/1");
+    }
+    const c = new Chess();
+    for (const san of opening.line) {
+      const own = c.turn() === opening.color;
+      const m = c.moves({ verbose: true }).find((m) => m.san === san)!;
+      if (own) {
+        await expect(page.locator(".hint-target")).toHaveCount(0);
+        await clickMove(page, m.from, m.to);
+        await tick(page, 1200);
+      }
+      c.move(san);
+    }
+    if (index < 2) {
+      await expect(
+        page.getByRole("heading", { name: "Sequência perfeita!", exact: true }),
+      ).toBeVisible();
+      await tick(page, 2200);
+    }
+  }
+  await expect(
+    page.getByRole("heading", { name: "Treino concluído!", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".training-session-row").filter({ hasText: "Siciliana" }),
+  ).toContainText("2/2");
+  expect(await wins(page, "gambito")).toBe(1);
+  expect(await wins(page, "siciliana")).toBe(2);
+  await tick(page, 5000);
+  await expect(
+    page.getByRole("heading", { name: "Treino concluído!", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Voltar à central", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Central de repetição", exact: true }),
+  ).toBeVisible();
+});
+test("training configuration prevents empty selection and invalid repetition counts", async ({
+  page,
+}) => {
+  await go(page, "Central de repetição", "Repetir");
+  const start = page.getByRole("button", {
+    name: "Iniciar treino aleatório",
+    exact: true,
+  });
+  await expect(start).toBeDisabled();
+  await page.getByText("Selecionar aberturas (0)", { exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: "Abertura Italiana", exact: true })
+    .check();
+  const count = page.getByRole("spinbutton", {
+    name: "Repetições de Abertura Italiana",
+    exact: true,
+  });
+  await count.fill("0");
+  await expect(start).toBeDisabled();
+  await count.fill("1.5");
+  await expect(start).toBeDisabled();
+  await count.fill("4");
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(page.locator(".training-session")).toContainText("0/4");
+  await expect(page.locator(".memory-count strong")).toHaveText(["0", "4"]);
+  await expect(page.locator(".step-eyebrow")).toHaveText("REPETIÇÃO 1 DE 4");
+  await page
+    .getByRole("button", { name: "Encerrar treino", exact: true })
+    .click();
+  await tick(page, 3000);
+  await expect(
+    page.getByRole("heading", { name: "Central de repetição", exact: true }),
+  ).toBeVisible();
+  expect(await wins(page, "italiana")).toBe(0);
+});
+test("fullscreen board fits viewport and instructions can be shown, hidden and exited", async ({
+  page,
+}) => {
+  await beginTutorial(page, openings[0]);
+  await page.getByRole("button", { name: "Tela cheia", exact: true }).click();
+  await expect(page.locator(".board-fullscreen")).toBeVisible();
+  await expect(page.locator(".right-column")).toBeHidden();
+  await expect(page.locator(".hint-target")).toHaveCount(0);
+  const size = page.viewportSize()!;
+  const box = (await page.locator(".board").boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(60);
+  expect(box.x + box.width).toBeLessThanOrEqual(size.width + 1);
+  expect(box.y + box.height).toBeLessThanOrEqual(size.height + 1);
+  await page
+    .getByRole("button", { name: "Mostrar instruções", exact: true })
+    .click();
+  await expect(page.locator(".right-column")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Sua vez: e4", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".hint-target")).toHaveCount(1);
+  await page
+    .getByRole("button", { name: "Ocultar instruções", exact: true })
+    .click();
+  await clickMove(page, "e2", "e4");
+  await tick(page);
+  await expect(page.locator(".board-fullscreen")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Mostrar instruções", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Sua vez: Nf3", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Sair", exact: true }).click();
+  await expect(page.locator(".board-fullscreen")).toHaveCount(0);
+  await expect(page.locator(".history .panel-heading span")).toHaveText(
+    "2 meios-lances",
+  );
+});
+test("fullscreen fallback works without browser API and Escape restores layout", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    HTMLElement.prototype.requestFullscreen =
+      undefined as unknown as typeof HTMLElement.prototype.requestFullscreen;
+  });
+  await go(page, "Jogo livre", "Jogar");
+  await page.getByRole("button", { name: "Tela cheia", exact: true }).click();
+  await page.setViewportSize({ width: 700, height: 360 });
+  const box = (await page.locator(".board").boundingBox())!;
+  expect(box.y + box.height).toBeLessThanOrEqual(361);
+  expect(box.x + box.width).toBeLessThanOrEqual(701);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".board-fullscreen")).toHaveCount(0);
+  expect(await page.evaluate(() => document.body.style.overflow)).not.toBe(
+    "hidden",
+  );
+});
+test("expanded catalog has five white and nine black lessons and preserves legacy totals", async ({
+  page,
+}) => {
+  await page.evaluate(
+    (key) =>
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          gambito: { studied: true, wins: 3 },
+          siciliana: { studied: true, wins: 2 },
+        }),
+      ),
+    PROGRESS_KEY,
+  );
+  await page.reload();
+  await go(page, "Aprender aberturas", "Aprender");
+  await expect(page.locator(".opening-card")).toHaveCount(5);
+  await page
+    .getByRole("button", { name: "♚ Peças pretas", exact: true })
+    .click();
+  await expect(page.locator(".opening-card")).toHaveCount(9);
+  await expect(
+    page.getByRole("heading", {
+      name: "Gambito da Rainha Recusado",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await go(page, "Central de repetição", "Repetir");
+  await expect(page.locator(".repeat-item")).toHaveCount(14);
+  await expect(page.locator(".repeat-summary")).toContainText(
+    "1 de 14 aberturas dominadas",
+  );
+  await expect(page.locator(".repeat-summary")).toContainText("5 de 42");
+  await page.getByText("Selecionar aberturas (0)", { exact: true }).click();
+  await expect(page.getByRole("checkbox")).toHaveCount(14);
+  await page
+    .getByRole("checkbox", { name: "Defesa Caro-Kann", exact: true })
+    .check();
+  await page
+    .getByRole("button", { name: "Iniciar treino aleatório", exact: true })
+    .click();
+  await tick(page);
+  await expect(page.locator(".square").first()).toHaveAttribute(
+    "data-square",
+    "h1",
+  );
+  await expect(
+    page.getByRole("heading", { name: /Defesa Caro-Kann MODO/ }),
+  ).toBeVisible();
+  expect(await wins(page, "gambito")).toBe(3);
 });

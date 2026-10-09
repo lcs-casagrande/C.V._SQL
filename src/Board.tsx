@@ -22,6 +22,7 @@ export function Board({
   onMove,
   hint,
   showHints = true,
+  reportInvalidMoves = false,
 }: {
   game: Chess;
   orientation: Color;
@@ -29,6 +30,7 @@ export function Board({
   onMove: (from: Square, to: Square) => void;
   hint?: { from: Square; to: Square } | null;
   showHints?: boolean;
+  reportInvalidMoves?: boolean;
 }) {
   const [selected, setSelected] = useState<Square | null>(null);
   const drag = useRef<Square | null>(null);
@@ -67,6 +69,7 @@ export function Board({
         setSelected(sq);
         return;
       }
+      if (reportInvalidMoves) onMove(selected, sq);
       setSelected(null);
       return;
     }
